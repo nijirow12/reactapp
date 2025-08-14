@@ -1,103 +1,131 @@
-import Image from "next/image";
+"use client";
+import { useState } from "react";
+
+type Result = {
+  summary: string;
+  articles: Array<{
+    title: string;
+    description: string;
+    url: string;
+    source: string;
+    publishedAt: string;
+  }>;
+};
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [query, setQuery] = useState("AI");
+  const [language, setLanguage] = useState("ja");
+  const [days, setDays] = useState(3);
+  const [pageSize, setPageSize] = useState(10);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, language, days, pageSize }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
+      setResult(json as Result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : typeof err === "string" ? err : "不明なエラー";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen p-6 sm:p-10 max-w-5xl mx-auto">
+      <h1 className="text-2xl sm:text-3xl font-bold mb-4">ニュース要約（NewsAPI + ChatGPT）</h1>
+      <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-6 mb-6">
+        <input
+          className="sm:col-span-3 border rounded px-3 py-2 bg-background text-foreground"
+          placeholder="興味のあるトピック（例: 生成AI、半導体、気候変動）"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          required
+        />
+        <select
+          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+        >
+          <option value="ja">日本語</option>
+          <option value="en">English</option>
+        </select>
+        <input
+          type="number"
+          min={1}
+          max={30}
+          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          title="過去何日分を対象にするか"
+        />
+        <input
+          type="number"
+          min={1}
+          max={50}
+          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
+          value={pageSize}
+          onChange={(e) => setPageSize(Number(e.target.value))}
+          title="取得件数"
+        />
+        <button
+          type="submit"
+          className="sm:col-span-6 bg-foreground text-background rounded px-4 py-2 disabled:opacity-60"
+          disabled={loading}
+        >
+          {loading ? "要約中…" : "取得して要約"}
+        </button>
+      </form>
+
+      {error && (
+        <div className="text-red-600 mb-4">エラー: {error}</div>
+      )}
+
+      {result && (
+        <div className="grid gap-6">
+          <section>
+            <h2 className="text-xl font-semibold mb-2">要約</h2>
+            <div className="prose whitespace-pre-wrap text-sm sm:text-base">
+              {result.summary || "（サマリーが空です）"}
+            </div>
+          </section>
+          <section>
+            <h2 className="text-xl font-semibold mb-2">取得した記事</h2>
+            <ul className="space-y-3">
+              {result.articles.map((a, i) => (
+                <li key={i} className="border rounded p-3">
+                  <a
+                    className="font-medium hover:underline"
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {a.title}
+                  </a>
+                  <div className="text-xs opacity-70 mt-1">
+                    {a.source} ・ {new Date(a.publishedAt).toLocaleString()}
+                  </div>
+                  {a.description && (
+                    <p className="text-sm mt-2">{a.description}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      )}
     </div>
   );
 }
