@@ -1,5 +1,13 @@
 "use client";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, Search, Calendar, Globe, ExternalLink } from "lucide-react";
 
 type Result = {
   summary: string;
@@ -44,88 +52,196 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen p-6 sm:p-10 max-w-5xl mx-auto">
-      <h1 className="text-2xl sm:text-3xl font-bold mb-4">ニュース要約（NewsAPI + ChatGPT）</h1>
-      <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-6 mb-6">
-        <input
-          className="sm:col-span-3 border rounded px-3 py-2 bg-background text-foreground"
-          placeholder="興味のあるトピック（例: 生成AI、半導体、気候変動）"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          required
-        />
-        <select
-          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-        >
-          <option value="ja">日本語</option>
-          <option value="en">English</option>
-        </select>
-        <input
-          type="number"
-          min={1}
-          max={30}
-          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-          title="過去何日分を対象にするか"
-        />
-        <input
-          type="number"
-          min={1}
-          max={50}
-          className="sm:col-span-1 border rounded px-3 py-2 bg-background text-foreground"
-          value={pageSize}
-          onChange={(e) => setPageSize(Number(e.target.value))}
-          title="取得件数"
-        />
-        <button
-          type="submit"
-          className="sm:col-span-6 bg-foreground text-background rounded px-4 py-2 disabled:opacity-60"
-          disabled={loading}
-        >
-          {loading ? "要約中…" : "取得して要約"}
-        </button>
-      </form>
-
-      {error && (
-        <div className="text-red-600 mb-4">エラー: {error}</div>
-      )}
-
-      {result && (
-        <div className="grid gap-6">
-          <section>
-            <h2 className="text-xl font-semibold mb-2">要約</h2>
-            <div className="prose whitespace-pre-wrap text-sm sm:text-base">
-              {result.summary || "（サマリーが空です）"}
-            </div>
-          </section>
-          <section>
-            <h2 className="text-xl font-semibold mb-2">取得した記事</h2>
-            <ul className="space-y-3">
-              {result.articles.map((a, i) => (
-                <li key={i} className="border rounded p-3">
-                  <a
-                    className="font-medium hover:underline"
-                    href={a.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {a.title}
-                  </a>
-                  <div className="text-xs opacity-70 mt-1">
-                    {a.source} ・ {new Date(a.publishedAt).toLocaleString()}
-                  </div>
-                  {a.description && (
-                    <p className="text-sm mt-2">{a.description}</p>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mb-2">
+            ニュース要約
+          </h1>
+          <p className="text-muted-foreground text-lg">
+            NewsAPI + ChatGPTで興味のある分野の最新ニュースを要約
+          </p>
         </div>
-      )}
+
+        {/* Search Form */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Search className="h-5 w-5" />
+              検索条件
+            </CardTitle>
+            <CardDescription>
+              興味のあるトピックを入力し、条件を設定してください
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onSubmit} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="sm:col-span-2 lg:col-span-2">
+                  <Label htmlFor="query">検索キーワード</Label>
+                  <Input
+                    id="query"
+                    placeholder="例: 生成AI、半導体、気候変動"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    required
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="language">言語</Label>
+                  <Select value={language} onValueChange={setLanguage}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ja">🇯🇵 日本語</SelectItem>
+                      <SelectItem value="en">🇺🇸 English</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="days">期間（日）</Label>
+                  <Input
+                    id="days"
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={days}
+                    onChange={(e) => setDays(Number(e.target.value))}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-4 items-end">
+                <div className="flex-1">
+                  <Label htmlFor="pageSize">取得件数</Label>
+                  <Input
+                    id="pageSize"
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="mt-1"
+                  />
+                </div>
+                <Button type="submit" disabled={loading} className="px-8">
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      要約中...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="h-4 w-4" />
+                      取得して要約
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        {/* Error Display */}
+        {error && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertDescription>エラー: {error}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Results */}
+        {result && (
+          <div className="space-y-6">
+            {/* Summary Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Globe className="h-5 w-5" />
+                  要約結果
+                </CardTitle>
+                <CardDescription>
+                  ChatGPTによる{query}に関するニュースの要約
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="prose prose-sm sm:prose max-w-none">
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {result.summary || "（サマリーが空です）"}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Articles Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Calendar className="h-5 w-5" />
+                  取得した記事
+                  <Badge variant="secondary" className="ml-auto">
+                    {result.articles.length}件
+                  </Badge>
+                </CardTitle>
+                <CardDescription>
+                  過去{days}日間の関連記事
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {result.articles.map((article, i) => (
+                    <div
+                      key={i}
+                      className="border rounded-lg p-4 hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium leading-tight mb-2">
+                            <a
+                              href={article.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:text-primary transition-colors line-clamp-2"
+                            >
+                              {article.title}
+                            </a>
+                          </h3>
+                          {article.description && (
+                            <p className="text-sm text-muted-foreground mb-3 line-clamp-3">
+                              {article.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <Globe className="h-3 w-3" />
+                              {article.source}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Calendar className="h-3 w-3" />
+                              {new Date(article.publishedAt).toLocaleDateString('ja-JP')}
+                            </span>
+                          </div>
+                        </div>
+                        <Button variant="outline" size="sm" asChild>
+                          <a
+                            href={article.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
