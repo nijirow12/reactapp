@@ -8,6 +8,7 @@ type SummarizeRequest = {
   language?: string; // ja | en | ...
   days?: number; // 何日分遡るか
   pageSize?: number; // 取得件数（上限: NewsAPIの制限に依存）
+  preferDiverseSources?: boolean; // ソース多様性を優先
 };
 
 type Article = {
@@ -60,6 +61,42 @@ function extractOutputText(r: unknown): string {
   return "";
 }
 
+function buildPrompt(params: {
+  query: string;
+  days: number;
+  articles: Article[];
+  language: string; // 検索用（NewsAPI）に利用。出力は常に日本語。
+}): string {
+  const { query, days, articles } = params;
+  const list = articles
+    .map(
+      (a, i) =>
+        `${i + 1}. ${a.title} — ${a.description || "(説明なし)"} [${a.source}] (${a.publishedAt})\n${a.url}`
+    )
+    .join("\n\n");
+
+  // 出力は常に日本語
+  return (
+    `あなたは調査に長けたニュースアナリストです。出力は必ず日本語で、以下のガイドラインに従ってください。\n` +
+    `- 重複や宣伝色の強い内容は除外し、一次情報/信頼性を重視する\n` +
+    `- 事実と推測を分けて記述する\n` +
+    `- 数字や日付は簡潔かつ一貫した書式（YYYY-MM-DD）で示す\n` +
+    `- 出典は本文末の「関連リンク」に限り、与えられたURL以外は生成しない\n\n` +
+    `出力フォーマット（見出しはそのまま使ってください）:\n` +
+    `TL;DR\n` +
+    `- 1〜2文で全体像を端的に要約\n\n` +
+    `重要ポイント\n` +
+    `- 3〜6個の箇条書き。各項目に「要点」「背景/根拠」「今後の見通し」を1〜2文ずつ\n\n` +
+    `補足/示唆\n` +
+    `- あれば2〜3個の箇条書き（影響、リスク/機会、未解決点 など）\n\n` +
+    `関連リンク\n` +
+    `- 2〜4件（タイトル – ソース – URL の順）\n\n` +
+    `対象トピック: ${query}\n` +
+    `対象期間: 過去${days}日\n\n` +
+    `記事一覧:\n${list}`
+  );
+}
+
 export async function POST(req: Request) {
   let body: SummarizeRequest = {};
   try {
@@ -72,6 +109,7 @@ export async function POST(req: Request) {
   const language = (body.language || "ja").trim();
   const days = Math.min(Math.max(Number(body.days ?? 1), 1), 30);
   const pageSize = Math.min(Math.max(Number(body.pageSize ?? 10), 1), 50);
+  const preferDiverseSources = Boolean(body.preferDiverseSources);
 
   if (!query) {
     return NextResponse.json({ error: "'query' は必須です" }, { status: 400 });
@@ -124,7 +162,9 @@ export async function POST(req: Request) {
     const newsJson: unknown = await newsRes.json();
     const parsed = (newsJson ?? {}) as Partial<NewsApiResponse>;
     const rawArticles = Array.isArray(parsed.articles) ? parsed.articles : [];
-    const articles: Article[] = rawArticles.map((a) => ({
+
+    // 基本整形
+    const normalized: Article[] = rawArticles.map((a) => ({
       title: a?.title ?? "",
       description: a?.description ?? "",
       url: a?.url ?? "",
@@ -132,18 +172,43 @@ export async function POST(req: Request) {
       publishedAt: a?.publishedAt ?? "",
     }));
 
+    // 1) 重複排除（タイトル or URL で単純排除）
+    const seen = new Set<string>();
+    const deduped: Article[] = [];
+    for (const item of normalized) {
+      const key = (item.title || item.url).trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(item);
+    }
+
+    // 2) ソース多様性優先（オプション）
+    let articles: Article[] = deduped;
+    if (preferDiverseSources) {
+      const bySource = new Map<string, Article>();
+      for (const a of deduped) {
+        if (!bySource.has(a.source)) bySource.set(a.source, a);
+        if (bySource.size >= pageSize) break;
+      }
+      // 足りない場合は残りを追加
+      const picked = Array.from(bySource.values());
+      if (picked.length < pageSize) {
+        for (const a of deduped) {
+          if (picked.length >= pageSize) break;
+          if (!picked.includes(a)) picked.push(a);
+        }
+      }
+      articles = picked.slice(0, pageSize);
+    } else {
+      articles = deduped.slice(0, pageSize);
+    }
+
     if (!articles.length) {
       return NextResponse.json({ summary: "該当する記事が見つかりませんでした。", articles: [] });
     }
 
-    const list = articles
-      .map(
-        (a, i) =>
-          `${i + 1}. ${a.title} — ${a.description || "(説明なし)"} [${a.source}] (${a.publishedAt})\n${a.url}`
-      )
-      .join("\n\n");
-
-    const prompt = `あなたは調査に長けたアナリストです。以下は「${query}」に関する過去${days}日以内のニュースです。重複や宣伝色の強い内容を避け、重要ポイント3〜6個を箇条書きで日本語要約してください。各ポイントは「要点」「背景/根拠」「今後の見通し」を1〜2文で簡潔に。最後に関連リンクを2〜4件（タイトル + 短い説明）で列挙してください。\n\n記事一覧:\n${list}`;
+  const prompt = buildPrompt({ query, days, articles, language });
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   const aiRes = await openai.responses.create({

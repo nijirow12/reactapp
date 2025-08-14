@@ -25,6 +25,7 @@ export default function Home() {
   const [language, setLanguage] = useState("ja");
   const [days, setDays] = useState(3);
   const [pageSize, setPageSize] = useState(10);
+  const [preferDiverseSources, setPreferDiverseSources] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -38,7 +39,7 @@ export default function Home() {
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, language, days, pageSize }),
+        body: JSON.stringify({ query, language, days, pageSize, preferDiverseSources }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
@@ -90,7 +91,7 @@ export default function Home() {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="language">言語</Label>
+                  <Label htmlFor="language">記事言語</Label>
                   <Select value={language} onValueChange={setLanguage}>
                     <SelectTrigger className="mt-1">
                       <SelectValue />
@@ -100,6 +101,9 @@ export default function Home() {
                       <SelectItem value="en">🇺🇸 English</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    要約の出力は常に日本語です（この設定は記事の検索言語にのみ適用）。
+                  </p>
                 </div>
                 <div>
                   <Label htmlFor="days">期間（日）</Label>
@@ -113,6 +117,16 @@ export default function Home() {
                     className="mt-1"
                   />
                 </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="diverse"
+                  type="checkbox"
+                  className="accent-primary size-4"
+                  checked={preferDiverseSources}
+                  onChange={(e) => setPreferDiverseSources(e.target.checked)}
+                />
+                <Label htmlFor="diverse">ソースの多様性を優先する</Label>
               </div>
               <div className="flex gap-4 items-end">
                 <div className="flex-1">
@@ -190,8 +204,21 @@ export default function Home() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {result.articles.map((article, i) => (
+                {/* 簡易タイムライン（日付でグルーピング） */}
+                {Object.entries(
+                  result.articles.reduce<Record<string, typeof result.articles>>( (acc, a) => {
+                    const d = new Date(a.publishedAt)
+                      .toISOString()
+                      .slice(0, 10)
+                    acc[d] ||= []
+                    acc[d].push(a)
+                    return acc
+                  }, {})
+                ).sort(([a],[b]) => (a < b ? 1 : -1)).map(([date, items]) => (
+                  <div key={date} className="mb-6">
+                    <div className="font-medium text-sm text-muted-foreground mb-2">{date}</div>
+                    <div className="space-y-4">
+                      {items.map((article, i) => (
                     <div
                       key={i}
                       className="border rounded-lg p-4 hover:shadow-md transition-shadow"
@@ -234,9 +261,11 @@ export default function Home() {
                           </a>
                         </Button>
                       </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </div>
