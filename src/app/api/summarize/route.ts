@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import cheerio from "cheerio";
 
 export const runtime = "nodejs"; // OpenAI SDKを使うためNode.jsランタイムを明示
 
@@ -160,8 +161,44 @@ export async function POST(req: Request) {
     }
 
     const newsJson: unknown = await newsRes.json();
+
+    // parsed を先に作り、anyキャストを避ける
     const parsed = (newsJson ?? {}) as Partial<NewsApiResponse>;
+    // 基本メタ情報をログ（キーは出さない）
+    try {
+      console.log("[NewsAPI] fetched", {
+        query,
+        language,
+        days,
+        pageSize,
+        status: newsRes.status,
+      });
+      const total = typeof parsed.totalResults === "number" ? parsed.totalResults : undefined;
+      const count = Array.isArray(parsed.articles) ? parsed.articles.length : 0;
+      console.log("[NewsAPI] meta", { totalResults: total, received: count });
+    } catch {
+      // noop
+    }
     const rawArticles = Array.isArray(parsed.articles) ? parsed.articles : [];
+    // 詳細ログは環境変数で制御
+    const debugNews =
+      (process.env.DEBUG_NEWSAPI ?? "").toLowerCase() === "true" ||
+      process.env.DEBUG_NEWSAPI === "1";
+    if (debugNews) {
+      try {
+        console.log(
+          "[NewsAPI] raw sample",
+          rawArticles.slice(0, 5).map((a) => ({
+            title: a?.title,
+            source: a?.source?.name,
+            publishedAt: a?.publishedAt,
+            url: a?.url,
+          }))
+        );
+      } catch {
+        // noop
+      }
+    }
 
     // 基本整形
     const normalized: Article[] = rawArticles.map((a) => ({
@@ -185,7 +222,7 @@ export async function POST(req: Request) {
 
     // 2) ソース多様性優先（オプション）
     let articles: Article[] = deduped;
-    if (preferDiverseSources) {
+  if (preferDiverseSources) {
       const bySource = new Map<string, Article>();
       for (const a of deduped) {
         if (!bySource.has(a.source)) bySource.set(a.source, a);
@@ -208,7 +245,85 @@ export async function POST(req: Request) {
       return NextResponse.json({ summary: "該当する記事が見つかりませんでした。", articles: [] });
     }
 
-  const prompt = buildPrompt({ query, days, articles, language });
+    // 追加: 主要記事の本文をサーバー側で取得して抜粋を生成（最大3件、トークン節約のため短く）
+    async function fetchArticleText(url: string): Promise<string | null> {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) return null;
+        const html = await res.text();
+        const $ = cheerio.load(html);
+        // 汎用的な本文抽出の試み（記事本文らしき要素を優先）
+        const selectors = [
+          "article",
+          "main",
+          "#content",
+          "[role=main]",
+          ".article-body",
+          ".post-content",
+          ".entry-content",
+        ];
+        for (const sel of selectors) {
+          const el = $(sel).first();
+          if (el && el.text().trim().length > 200) {
+            return el.text().replace(/\s+/g, " ").trim();
+          }
+        }
+        // フォールバック: p要素を結合
+        const ps = $("p").toArray().map((p) => $(p).text().trim()).filter(Boolean);
+        const joined = ps.join(" \n\n ");
+        return joined.length > 200 ? joined : null;
+      } catch {
+        return null;
+      }
+    }
+
+    const maxFull = 3;
+    const enrichedArticles: Article[] = [];
+
+    const debugNewsFull =
+      (process.env.DEBUG_NEWSAPI ?? "").toLowerCase() === "full" ||
+      (process.env.DEBUG_NEWSAPI_FULL ?? "").toLowerCase() === "true" ||
+      process.env.DEBUG_NEWSAPI_FULL === "1";
+
+    for (const a of articles.slice(0, maxFull)) {
+      const text = await fetchArticleText(a.url);
+      // descriptionには短めの抜粋を入れるが、全文は環境変数でログ出力する
+      enrichedArticles.push({
+        ...a,
+        description: text ? (a.description + "\n\n[本文抜粋]\n" + text.slice(0, 1000)) : a.description,
+      });
+
+      if (debugNewsFull && text) {
+        try {
+          console.log("[NewsAPI FULL TEXT]", {
+            url: a.url,
+            source: a.source,
+            publishedAt: a.publishedAt,
+            fullText: text,
+          });
+        } catch {
+          // noop
+        }
+      }
+      // ここでfetchで取得した本文を必ず出力（開発目的）
+      if (text) {
+        try {
+          console.log("[NewsAPI FETCHED TEXT - ALWAYS]", {
+            url: a.url,
+            source: a.source,
+            publishedAt: a.publishedAt,
+            extractedText: text,
+          });
+        } catch {
+          // noop
+        }
+      }
+    }
+
+    // その他は元のまま
+    const finalArticles = enrichedArticles.concat(articles.slice(maxFull));
+
+    const prompt = buildPrompt({ query, days, articles: finalArticles, language });
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   const aiRes = await openai.responses.create({
@@ -218,6 +333,20 @@ export async function POST(req: Request) {
     });
 
   const summary = extractOutputText(aiRes);
+
+    // 最終的に使用する記事の概要をログ
+    try {
+      console.log(
+        "[NewsAPI] selected",
+        articles.slice(0, 10).map((a) => ({
+          title: a.title,
+          source: a.source,
+          publishedAt: a.publishedAt,
+        }))
+      );
+    } catch {
+      // noop
+    }
 
     return NextResponse.json({ summary, articles });
   } catch (err: unknown) {

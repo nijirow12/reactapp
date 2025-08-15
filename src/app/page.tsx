@@ -42,6 +42,12 @@ export default function Home() {
         body: JSON.stringify({ query, language, days, pageSize, preferDiverseSources }),
       });
       const json = await res.json();
+      // クライアント側の確認ログ（要約は長いので省略）
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          console.log("[Client] Articles", (json as Result).articles);
+        } catch {}
+      }
       if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
       setResult(json as Result);
     } catch (err: unknown) {
