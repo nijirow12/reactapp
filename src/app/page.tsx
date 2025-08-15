@@ -42,12 +42,17 @@ export default function Home() {
         body: JSON.stringify({ query, language, days, pageSize, preferDiverseSources }),
       });
       const json = await res.json();
-      // クライアント側の確認ログ（要約は長いので省略）
-      if (process.env.NODE_ENV !== "production") {
-        try {
-          console.log("[Client] Articles", (json as Result).articles);
-        } catch {}
-      }
+      // クライアント側: 取得した記事と抽出全文を必ずコンソールに出力（開発/本番問わず）
+      try {
+        const articles = (json as Result).articles || [];
+        console.log("[Client] Articles (with extractedText)", articles.map((a) => ({
+          title: a.title,
+          source: a.source,
+          url: a.url,
+          publishedAt: a.publishedAt,
+          extractedText: (a as any).extractedText ?? null,
+        })));
+      } catch {}
       if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
       setResult(json as Result);
     } catch (err: unknown) {

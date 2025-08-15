@@ -18,6 +18,8 @@ type Article = {
   url: string;
   source: string;
   publishedAt: string;
+  // サーバーで抽出した全文（可能なら）。クライアントにも返す
+  extractedText?: string | null;
 };
 
 type NewsApiArticle = {
@@ -66,7 +68,7 @@ function buildPrompt(params: {
   query: string;
   days: number;
   articles: Article[];
-  language: string; // 検索用（NewsAPI）に利用。出力は常に日本語。
+  language: string;
 }): string {
   const { query, days, articles } = params;
   const list = articles
@@ -76,22 +78,20 @@ function buildPrompt(params: {
     )
     .join("\n\n");
 
-  // 出力は常に日本語
   return (
-    `あなたは調査に長けたニュースアナリストです。出力は必ず日本語で、以下のガイドラインに従ってください。\n` +
-    `- 重複や宣伝色の強い内容は除外し、一次情報/信頼性を重視する\n` +
-    `- 事実と推測を分けて記述する\n` +
-    `- 数字や日付は簡潔かつ一貫した書式（YYYY-MM-DD）で示す\n` +
-    `- 出典は本文末の「関連リンク」に限り、与えられたURL以外は生成しない\n\n` +
-    `出力フォーマット（見出しはそのまま使ってください）:\n` +
-    `TL;DR\n` +
-    `- 1〜2文で全体像を端的に要約\n\n` +
-    `重要ポイント\n` +
+    `出力フォーマット（見出しはそのまま使ってください）。重要: 記事数が多い場合でも下記の形式を守り、必ず全ての提供記事に対して短い要約を出力してください。\n\n` +
+    `1) 各記事の短い要約（必須）\n` +
+    `- 記事一覧に示した全記事（最大 ${articles.length} 件）について、各番号に対応する1文（目安: 15〜40文字）で要約してください。\n` +
+    `- 形式は厳密に「n) 要約文」のように番号をつけて出力してください（例: "1) 主要な技術発表があり、〜"）。\n\n` +
+    `2) TL;DR（要約）\n` +
+    `- 1〜2文で全体像を端的にまとめる\n\n` +
+    `3) 重要ポイント\n` +
     `- 3〜6個の箇条書き。各項目に「要点」「背景/根拠」「今後の見通し」を1〜2文ずつ\n\n` +
-    `補足/示唆\n` +
-    `- あれば2〜3個の箇条書き（影響、リスク/機会、未解決点 など）\n\n` +
-    `関連リンク\n` +
+    `4) 補足/示唆（あれば）\n` +
+    `- 2〜3個の箇条書き（影響、リスク/機会、未解決点 など）\n\n` +
+    `5) 関連リンク\n` +
     `- 2〜4件（タイトル – ソース – URL の順）\n\n` +
+    `注意: 本プロンプトには多くの記事が含まれる可能性があります。各記事の要約は短めにして出力全体のトークン量を抑えてください。重要記事のみ深掘りする場合は、記事に"[本文抜粋]"が含まれるものを優先して参照してください。\n\n` +
     `対象トピック: ${query}\n` +
     `対象期間: 過去${days}日\n\n` +
     `記事一覧:\n${list}`
@@ -99,40 +99,28 @@ function buildPrompt(params: {
 }
 
 export async function POST(req: Request) {
-  let body: SummarizeRequest = {};
   try {
-    body = await req.json();
-  } catch {
-    // noop
-  }
+    const body = (await req.json()) as SummarizeRequest;
+    const query = (body.query || "").trim();
+    const language = (body.language || "ja").trim();
+    const days = Math.min(Math.max(Number(body.days ?? 1), 1), 30);
+    const pageSize = Math.min(Math.max(Number(body.pageSize ?? 10), 1), 50);
+    const preferDiverseSources = Boolean(body.preferDiverseSources);
 
-  const query = (body.query || "").trim();
-  const language = (body.language || "ja").trim();
-  const days = Math.min(Math.max(Number(body.days ?? 1), 1), 30);
-  const pageSize = Math.min(Math.max(Number(body.pageSize ?? 10), 1), 50);
-  const preferDiverseSources = Boolean(body.preferDiverseSources);
+    if (!query) {
+      return NextResponse.json({ error: "'query' は必須です" }, { status: 400 });
+    }
 
-  if (!query) {
-    return NextResponse.json({ error: "'query' は必須です" }, { status: 400 });
-  }
+    const NEWSAPI_API_KEY = process.env.NEWSAPI_API_KEY;
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-  const NEWSAPI_API_KEY = process.env.NEWSAPI_API_KEY;
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    if (!NEWSAPI_API_KEY) {
+      return NextResponse.json({ error: "NEWSAPI_API_KEY が未設定です" }, { status: 500 });
+    }
+    if (!OPENAI_API_KEY) {
+      return NextResponse.json({ error: "OPENAI_API_KEY が未設定です" }, { status: 500 });
+    }
 
-  if (!NEWSAPI_API_KEY) {
-    return NextResponse.json(
-      { error: "NEWSAPI_API_KEY が未設定です" },
-      { status: 500 }
-    );
-  }
-  if (!OPENAI_API_KEY) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY が未設定です" },
-      { status: 500 }
-    );
-  }
-
-  try {
     const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
       .toISOString()
       .slice(0, 10); // YYYY-MM-DD
@@ -148,42 +136,21 @@ export async function POST(req: Request) {
 
     const newsRes = await fetch(url.toString(), {
       headers: { "X-Api-Key": NEWSAPI_API_KEY },
-      // サーバー側でのみ実行（CORS回避）
       cache: "no-store",
     });
 
     if (!newsRes.ok) {
       const text = await newsRes.text();
-      return NextResponse.json(
-        { error: "NewsAPI 呼び出しに失敗", details: text },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "NewsAPI 呼び出しに失敗", details: text }, { status: 502 });
     }
 
     const newsJson: unknown = await newsRes.json();
-
-    // parsed を先に作り、anyキャストを避ける
     const parsed = (newsJson ?? {}) as Partial<NewsApiResponse>;
-    // 基本メタ情報をログ（キーは出さない）
-    try {
-      console.log("[NewsAPI] fetched", {
-        query,
-        language,
-        days,
-        pageSize,
-        status: newsRes.status,
-      });
-      const total = typeof parsed.totalResults === "number" ? parsed.totalResults : undefined;
-      const count = Array.isArray(parsed.articles) ? parsed.articles.length : 0;
-      console.log("[NewsAPI] meta", { totalResults: total, received: count });
-    } catch {
-      // noop
-    }
     const rawArticles = Array.isArray(parsed.articles) ? parsed.articles : [];
+
     // 詳細ログは環境変数で制御
     const debugNews =
-      (process.env.DEBUG_NEWSAPI ?? "").toLowerCase() === "true" ||
-      process.env.DEBUG_NEWSAPI === "1";
+      (process.env.DEBUG_NEWSAPI ?? "").toLowerCase() === "true" || process.env.DEBUG_NEWSAPI === "1";
     if (debugNews) {
       try {
         console.log(
@@ -207,6 +174,7 @@ export async function POST(req: Request) {
       url: a?.url ?? "",
       source: a?.source?.name ?? "",
       publishedAt: a?.publishedAt ?? "",
+      extractedText: null,
     }));
 
     // 1) 重複排除（タイトル or URL で単純排除）
@@ -222,13 +190,12 @@ export async function POST(req: Request) {
 
     // 2) ソース多様性優先（オプション）
     let articles: Article[] = deduped;
-  if (preferDiverseSources) {
+    if (preferDiverseSources) {
       const bySource = new Map<string, Article>();
       for (const a of deduped) {
         if (!bySource.has(a.source)) bySource.set(a.source, a);
         if (bySource.size >= pageSize) break;
       }
-      // 足りない場合は残りを追加
       const picked = Array.from(bySource.values());
       if (picked.length < pageSize) {
         for (const a of deduped) {
@@ -245,14 +212,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ summary: "該当する記事が見つかりませんでした。", articles: [] });
     }
 
-    // 追加: 主要記事の本文をサーバー側で取得して抜粋を生成（最大3件、トークン節約のため短く）
+    // 主要記事の本文をサーバー側で取得して抜粋を生成（最大3件）
     async function fetchArticleText(url: string): Promise<string | null> {
       try {
         const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) return null;
         const html = await res.text();
         const $ = cheerio.load(html);
-        // 汎用的な本文抽出の試み（記事本文らしき要素を優先）
         const selectors = [
           "article",
           "main",
@@ -268,7 +234,6 @@ export async function POST(req: Request) {
             return el.text().replace(/\s+/g, " ").trim();
           }
         }
-        // フォールバック: p要素を結合
         const ps = $("p").toArray().map((p) => $(p).text().trim()).filter(Boolean);
         const joined = ps.join(" \n\n ");
         return joined.length > 200 ? joined : null;
@@ -287,11 +252,26 @@ export async function POST(req: Request) {
 
     for (const a of articles.slice(0, maxFull)) {
       const text = await fetchArticleText(a.url);
-      // descriptionには短めの抜粋を入れるが、全文は環境変数でログ出力する
+      // descriptionには短めの抜粋を入れる
       enrichedArticles.push({
         ...a,
-        description: text ? (a.description + "\n\n[本文抜粋]\n" + text.slice(0, 1000)) : a.description,
+        description: text ? a.description + "\n\n[本文抜粋]\n" + text.slice(0, 1000) : a.description,
+        extractedText: text ?? null,
       });
+
+      // 全文は必ずサーバー側で出力（開発目的）
+      if (text) {
+        try {
+          console.log("[NewsAPI FETCHED TEXT - ALWAYS]", {
+            url: a.url,
+            source: a.source,
+            publishedAt: a.publishedAt,
+            extractedText: text,
+          });
+        } catch {
+          // noop
+        }
+      }
 
       if (debugNewsFull && text) {
         try {
@@ -305,56 +285,31 @@ export async function POST(req: Request) {
           // noop
         }
       }
-      // ここでfetchで取得した本文を必ず出力（開発目的）
-      if (text) {
-        try {
-          console.log("[NewsAPI FETCHED TEXT - ALWAYS]", {
-            url: a.url,
-            source: a.source,
-            publishedAt: a.publishedAt,
-            extractedText: text,
-          });
-        } catch {
-          // noop
-        }
-      }
     }
 
-    // その他は元のまま
     const finalArticles = enrichedArticles.concat(articles.slice(maxFull));
 
     const prompt = buildPrompt({ query, days, articles: finalArticles, language });
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-  const aiRes = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: prompt,
-      temperature: 0.3,
-    });
+    const aiRes = await openai.responses.create({ model: "gpt-4o-mini", input: prompt, temperature: 0.3 });
+    const summary = extractOutputText(aiRes);
 
-  const summary = extractOutputText(aiRes);
-
-    // 最終的に使用する記事の概要をログ
     try {
       console.log(
         "[NewsAPI] selected",
-        articles.slice(0, 10).map((a) => ({
-          title: a.title,
-          source: a.source,
-          publishedAt: a.publishedAt,
-        }))
+        finalArticles.slice(0, 10).map((a) => ({ title: a.title, source: a.source, publishedAt: a.publishedAt }))
       );
     } catch {
       // noop
     }
 
-    return NextResponse.json({ summary, articles });
+    return NextResponse.json({ summary, articles: finalArticles });
   } catch (err: unknown) {
     return NextResponse.json(
       {
         error: "サマリー生成に失敗しました",
-        details:
-          err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err),
+        details: err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err),
       },
       { status: 500 }
     );
