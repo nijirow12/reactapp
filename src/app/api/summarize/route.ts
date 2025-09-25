@@ -65,36 +65,38 @@ function extractOutputText(r: unknown): string {
 
 function buildPrompt(params: { query: string; days: number; articles: Article[] }): string {
   const { query, days, articles } = params;
-  const list = articles
+  type MaybeAuthorArticle = Article & { author?: string };
+  const list = (articles as MaybeAuthorArticle[])
     .map(
       (a, i) =>
-        `${i + 1}. TITLE: ${a.title}\nSOURCE: ${a.source}\nPUBLISHED: ${a.publishedAt}\nURL: ${a.url}\nTEXT: ${(a.description || "(説明なし)").slice(0, 800)}`
+        `${i + 1}. TITLE: ${a.title}\nSOURCE: ${a.source}\nPUBLISHED: ${a.publishedAt}\nAUTHOR: ${a.author || ""}\nURL: ${a.url}\nDESCRIPTION: ${(a.description || "(説明なし)").slice(0, 800)}`
     )
     .join("\n\n---\n\n");
 
-  return `以下は「${query}」に関する過去${days}日分の記事リストです。各記事を日本語で1文(15〜40文字目安)に要約し、最終的に全体を俯瞰した総合要約(overall)も日本語で1〜2文で作成してください。重要: 出力は必ず厳密なJSONのみ。余計な文章やマークダウンは禁止。\n\n要求JSONスキーマ例:\n{\n  "articles": [ { "index": 1, "summary": "〜" }, ... ],\n  "overall": "全体要約..."\n}\n制約:\n- index は入力リストの番号(1開始)をそのまま使う\n- 要約は事実ベース・簡潔・日本語\n- 記事本文内の未確定情報は断定しない\n- 文字数を抑えて冗長な接続詞を連発しない\n\n記事リスト:\n${list}\n\nJSONのみを出力:`;
+  return `以下はトピック「${query}」に関する過去${days}日分の記事一覧です。各記事について以下3点を日本語で簡潔に作成し、厳密なJSONのみを出力してください。追加説明やマークダウンは禁止。\n\n各記事で必要な3要素 (bullet 用):\n1) message: その記事が主に伝える中心メッセージ（15〜35文字程度、日本語）。\n2) support: そのメッセージを裏付ける具体的根拠/データ/事実（1文、日本語）。誇張や憶測は禁止。\n3) citation: APA形式の引用（Web記事版）。形式: Author/Source. (年, 月 日). Title. Source/Publisher. URL\n   - Authorが欠落する場合: Source名を著者位置に。\n   - 日付が不明: (n.d.) を使用し、月日省略。\n   - Titleは原文表記（可能なら30〜120文字にトリムし省略記号不要）。\n\n出力JSON スキーマ例:\n{\n  "articles": [\n    {\n      "index": 1,\n      "message": "中心メッセージ",\n      "support": "根拠となる具体的事実",\n      "citation": "Author. (2025, September 10). Title.... Source. URL"\n    }\n  ]\n}\n制約:\n- articles.length は入力記事数と同じ\n- index は1開始で対応記事番号\n- message / support は日本語。citation はAPA書式（英語タイトル原文可）\n- 推測語(恐らく/かもしれない)は避け、提供情報に基づく簡潔表現\n- support に複数文を入れない\n\n記事一覧:\n${list}\n\n厳密なJSONのみで出力:`;
 }
-
-function parseArticleJson(raw: string, count: number): { per: string[]; overall: string } {
-  const per = Array(count).fill("");
-  let overall = "";
+function parseArticleJsonDetailed(raw: string, count: number): { per: { message: string; support: string; citation: string }[] } {
+  const per = Array(count)
+    .fill(null)
+    .map(() => ({ message: "", support: "", citation: "" }));
   try {
-    const match = raw.match(/\{[\s\S]*\}$/); // 末尾にあるJSON風を抽出
+    const match = raw.match(/\{[\s\S]*\}$/);
     const jsonText = match ? match[0] : raw;
     const obj = JSON.parse(jsonText);
     if (Array.isArray(obj.articles)) {
       for (const item of obj.articles) {
         const idx = typeof item.index === "number" ? item.index : Number(item.i || item.id);
-        if (idx && idx >= 1 && idx <= count && typeof item.summary === "string") {
-          per[idx - 1] = item.summary.trim();
+        if (idx && idx >= 1 && idx <= count) {
+          if (typeof item.message === "string") per[idx - 1].message = item.message.trim();
+          if (typeof item.support === "string") per[idx - 1].support = item.support.trim();
+          if (typeof item.citation === "string") per[idx - 1].citation = item.citation.trim();
         }
       }
     }
-    if (typeof obj.overall === "string") overall = obj.overall.trim();
   } catch {
-    // JSON parse 失敗時は後段で fallback
+    // noop
   }
-  return { per, overall };
+  return { per };
 }
 
 export async function POST(req: Request) {
@@ -283,17 +285,21 @@ export async function POST(req: Request) {
 
     const finalArticles = enrichedArticles.concat(articles.slice(maxFull));
 
-    const prompt = buildPrompt({ query, days, articles: finalArticles });
+  const prompt = buildPrompt({ query, days, articles: finalArticles });
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const aiRes = await openai.responses.create({ model: "gpt-4o-mini", input: prompt, temperature: 0.3 });
     const rawSummary = extractOutputText(aiRes);
-    const { per: perSummaries, overall } = parseArticleJson(rawSummary, finalArticles.length);
+    const { per: perDetails } = parseArticleJsonDetailed(rawSummary, finalArticles.length);
 
-    // Fallback: per-article summary が欠落しているものには簡易生成
+    // Fallback
     finalArticles.forEach((a, i) => {
-      if (!perSummaries[i]) {
-        perSummaries[i] = a.title.slice(0, 40);
+      const d = perDetails[i];
+      if (!d.message) d.message = a.title.slice(0, 40);
+      if (!d.support) d.support = (a.description || "")?.split(/\n|。/)[0]?.slice(0, 60) || a.source;
+      if (!d.citation) {
+        const year = a.publishedAt ? a.publishedAt.slice(0, 4) : "n.d.";
+        d.citation = `${a.source || "Source"}. (${year}). ${a.title}. ${a.source || "Publisher"}. ${a.url}`;
       }
     });
 
@@ -306,7 +312,7 @@ export async function POST(req: Request) {
       // noop
     }
 
-  return NextResponse.json({ overallSummary: overall || rawSummary.slice(0, 500), articles: finalArticles.map((a, i) => ({ ...a, summary: perSummaries[i] })) });
+  return NextResponse.json({ articles: finalArticles.map((a, i) => ({ ...a, summaryBullets: [perDetails[i].message, perDetails[i].support, perDetails[i].citation] })) });
   } catch (err: unknown) {
     return NextResponse.json(
       {

@@ -10,14 +10,13 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Search, Calendar, Globe, ExternalLink } from "lucide-react";
 
 type Result = {
-  overallSummary: string;
   articles: Array<{
     title: string;
     description: string;
     url: string;
     source: string;
     publishedAt: string;
-    summary?: string; // per-article summary
+    summaryBullets?: string[]; // [message, support, citation]
     extractedText?: string;
   }>;
 };
@@ -52,7 +51,9 @@ export default function Home() {
           url: a.url,
           publishedAt: a.publishedAt,
           extractedText: a.extractedText ?? null,
-          summary: a.summary ?? null,
+          summaryBullets: Array.isArray((a as unknown as { summaryBullets?: unknown }).summaryBullets)
+            ? (a as { summaryBullets?: string[] }).summaryBullets
+            : null,
         })));
       } catch {}
       if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
@@ -229,12 +230,13 @@ export default function Home() {
                               {new Date(article.publishedAt).toLocaleDateString('ja-JP')}
                             </span>
                           </div>
-                          {article.summary && (
-                            <div className="mt-3 pt-2 border-t border-border/40">
-                              <p className="text-sm leading-snug">
-                                <span className="font-semibold mr-1">要約:</span>
-                                {article.summary}
-                              </p>
+                          {article.summaryBullets && article.summaryBullets.length === 3 && (
+                            <div className="mt-3 pt-2 border-t border-border/40 text-xs space-y-1">
+                              <ul className="list-disc pl-5 space-y-1">
+                                <li><span className="font-semibold">メッセージ:</span> {article.summaryBullets[0]}</li>
+                                <li><span className="font-semibold">根拠:</span> {article.summaryBullets[1]}</li>
+                                <li><span className="font-semibold">引用:</span> <span className="break-all">{article.summaryBullets[2]}</span></li>
+                              </ul>
                             </div>
                           )}
                         </div>
