@@ -105,15 +105,15 @@ export default function Home() {
             <form onSubmit={onSubmit} className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="sm:col-span-2 lg:col-span-2">
-                  <Label htmlFor="query">検索キーワード</Label>
+                  <Label htmlFor="query">検索キーワード <span className="text-xs font-normal text-muted-foreground">(任意)</span></Label>
                   <Input
                     id="query"
                     placeholder="例: 生成AI、半導体、気候変動"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    required
                     className="mt-1"
                   />
+                  <p className="mt-1 text-xs text-muted-foreground">未入力の場合は業界セレクトのみで検索します。両方空だと実行できません。</p>
                 </div>
                 <div>
                   <Label htmlFor="industry">業界</Label>
@@ -169,7 +169,7 @@ export default function Home() {
                     className="mt-1"
                   />
                 </div>
-                <Button type="submit" disabled={loading} className="px-8">
+                <Button type="submit" disabled={loading || (!query.trim() && !industry)} className="px-8">
                   {loading ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
