@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 // 言語選択削除に伴い Select関連は未使用のため除外
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Search, Calendar, Globe, ExternalLink } from "lucide-react";
+import { Loader2, Search, Calendar, Globe, ExternalLink, Building2 } from "lucide-react";
+import { buildIndustryQuery, INDUSTRY_KEYWORDS } from "@/lib/industryQueries";
 
 type Result = {
   articles: Array<{
@@ -23,6 +24,7 @@ type Result = {
 
 export default function Home() {
   const [query, setQuery] = useState("AI");
+  const [industry, setIndustry] = useState<string>("");
   const [days, setDays] = useState(3);
   const [pageSize, setPageSize] = useState(10);
   const [preferDiverseSources, setPreferDiverseSources] = useState(true);
@@ -36,10 +38,19 @@ export default function Home() {
     setError(null);
     setResult(null);
     try {
+      // 業界クエリを統合
+      let finalQuery = query.trim();
+      if (industry) {
+        const indQ = buildIndustryQuery(industry);
+        if (indQ) {
+          finalQuery = finalQuery ? `${finalQuery} AND ${indQ}` : indQ;
+        }
+      }
+
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ query, days, pageSize, preferDiverseSources }),
+  body: JSON.stringify({ query: finalQuery, days, pageSize, preferDiverseSources }),
       });
       const json = await res.json();
       // クライアント側: 取得した記事と抽出全文を必ずコンソールに出力（開発/本番問わず）
@@ -103,6 +114,23 @@ export default function Home() {
                     required
                     className="mt-1"
                   />
+                </div>
+                <div>
+                  <Label htmlFor="industry">業界</Label>
+                  <select
+                    id="industry"
+                    value={industry}
+                    onChange={(e) => setIndustry(e.target.value)}
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">(任意選択)</option>
+                    {Object.keys(INDUSTRY_KEYWORDS).map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                    <Building2 className="h-3 w-3" /> 選択すると代表キーワードを自動付与
+                  </p>
                 </div>
                 {/* 言語指定は削除（常に多言語記事→日本語要約） */}
                 <div>
