@@ -4,25 +4,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+// 言語選択削除に伴い Select関連は未使用のため除外
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Search, Calendar, Globe, ExternalLink } from "lucide-react";
 
 type Result = {
-  summary: string;
+  overallSummary: string;
   articles: Array<{
     title: string;
     description: string;
     url: string;
     source: string;
     publishedAt: string;
+    summary?: string; // per-article summary
+    extractedText?: string;
   }>;
 };
 
 export default function Home() {
   const [query, setQuery] = useState("AI");
-  const [language, setLanguage] = useState("ja");
   const [days, setDays] = useState(3);
   const [pageSize, setPageSize] = useState(10);
   const [preferDiverseSources, setPreferDiverseSources] = useState(true);
@@ -39,7 +40,7 @@ export default function Home() {
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, language, days, pageSize, preferDiverseSources }),
+  body: JSON.stringify({ query, days, pageSize, preferDiverseSources }),
       });
       const json = await res.json();
       // クライアント側: 取得した記事と抽出全文を必ずコンソールに出力（開発/本番問わず）
@@ -50,7 +51,8 @@ export default function Home() {
           source: a.source,
           url: a.url,
           publishedAt: a.publishedAt,
-          extractedText: (a as any).extractedText ?? null,
+          extractedText: a.extractedText ?? null,
+          summary: a.summary ?? null,
         })));
       } catch {}
       if (!res.ok) throw new Error(json?.error || "エラーが発生しました");
@@ -101,21 +103,7 @@ export default function Home() {
                     className="mt-1"
                   />
                 </div>
-                <div>
-                  <Label htmlFor="language">記事言語</Label>
-                  <Select value={language} onValueChange={setLanguage}>
-                    <SelectTrigger className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ja">🇯🇵 日本語</SelectItem>
-                      <SelectItem value="en">🇺🇸 English</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    要約の出力は常に日本語です（この設定は記事の検索言語にのみ適用）。
-                  </p>
-                </div>
+                {/* 言語指定は削除（常に多言語記事→日本語要約） */}
                 <div>
                   <Label htmlFor="days">期間（日）</Label>
                   <Input
@@ -194,7 +182,7 @@ export default function Home() {
               <CardContent>
                 <div className="prose prose-sm sm:prose max-w-none">
                   <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {result.summary || "（サマリーが空です）"}
+                    {result.overallSummary || "（サマリーが空です）"}
                   </div>
                 </div>
               </CardContent>
@@ -246,8 +234,13 @@ export default function Home() {
                               {article.title}
                             </a>
                           </h3>
+                          {article.summary && (
+                            <p className="text-sm text-primary font-medium mb-2 line-clamp-3">
+                              要約: {article.summary}
+                            </p>
+                          )}
                           {article.description && (
-                            <p className="text-sm text-muted-foreground mb-3 line-clamp-3">
+                            <p className="text-xs text-muted-foreground mb-3 line-clamp-3">
                               {article.description}
                             </p>
                           )}

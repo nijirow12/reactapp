@@ -6,10 +6,9 @@ export const runtime = "nodejs"; // OpenAI SDKを使うためNode.jsランタイ
 
 type SummarizeRequest = {
   query?: string;
-  language?: string; // ja | en | ...
-  days?: number; // 何日分遡るか
-  pageSize?: number; // 取得件数（上限: NewsAPIの制限に依存）
-  preferDiverseSources?: boolean; // ソース多様性を優先
+  days?: number;
+  pageSize?: number;
+  preferDiverseSources?: boolean;
 };
 
 type Article = {
@@ -64,45 +63,44 @@ function extractOutputText(r: unknown): string {
   return "";
 }
 
-function buildPrompt(params: {
-  query: string;
-  days: number;
-  articles: Article[];
-  language: string;
-}): string {
+function buildPrompt(params: { query: string; days: number; articles: Article[] }): string {
   const { query, days, articles } = params;
   const list = articles
     .map(
       (a, i) =>
-        `${i + 1}. ${a.title} — ${a.description || "(説明なし)"} [${a.source}] (${a.publishedAt})\n${a.url}`
+        `${i + 1}. TITLE: ${a.title}\nSOURCE: ${a.source}\nPUBLISHED: ${a.publishedAt}\nURL: ${a.url}\nTEXT: ${(a.description || "(説明なし)").slice(0, 800)}`
     )
-    .join("\n\n");
+    .join("\n\n---\n\n");
 
-  return (
-    `出力フォーマット（見出しはそのまま使ってください）。重要: 記事数が多い場合でも下記の形式を守り、必ず全ての提供記事に対して短い要約を出力してください。\n\n` +
-    `1) 各記事の短い要約（必須）\n` +
-    `- 記事一覧に示した全記事（最大 ${articles.length} 件）について、各番号に対応する1文（目安: 15〜40文字）で要約してください。\n` +
-    `- 形式は厳密に「n) 要約文」のように番号をつけて出力してください（例: "1) 主要な技術発表があり、〜"）。\n\n` +
-    `2) TL;DR（要約）\n` +
-    `- 1〜2文で全体像を端的にまとめる\n\n` +
-    `3) 重要ポイント\n` +
-    `- 3〜6個の箇条書き。各項目に「要点」「背景/根拠」「今後の見通し」を1〜2文ずつ\n\n` +
-    `4) 補足/示唆（あれば）\n` +
-    `- 2〜3個の箇条書き（影響、リスク/機会、未解決点 など）\n\n` +
-    `5) 関連リンク\n` +
-    `- 2〜4件（タイトル – ソース – URL の順）\n\n` +
-    `注意: 本プロンプトには多くの記事が含まれる可能性があります。各記事の要約は短めにして出力全体のトークン量を抑えてください。重要記事のみ深掘りする場合は、記事に"[本文抜粋]"が含まれるものを優先して参照してください。\n\n` +
-    `対象トピック: ${query}\n` +
-    `対象期間: 過去${days}日\n\n` +
-    `記事一覧:\n${list}`
-  );
+  return `以下は「${query}」に関する過去${days}日分の記事リストです。各記事を日本語で1文(15〜40文字目安)に要約し、最終的に全体を俯瞰した総合要約(overall)も日本語で1〜2文で作成してください。重要: 出力は必ず厳密なJSONのみ。余計な文章やマークダウンは禁止。\n\n要求JSONスキーマ例:\n{\n  "articles": [ { "index": 1, "summary": "〜" }, ... ],\n  "overall": "全体要約..."\n}\n制約:\n- index は入力リストの番号(1開始)をそのまま使う\n- 要約は事実ベース・簡潔・日本語\n- 記事本文内の未確定情報は断定しない\n- 文字数を抑えて冗長な接続詞を連発しない\n\n記事リスト:\n${list}\n\nJSONのみを出力:`;
+}
+
+function parseArticleJson(raw: string, count: number): { per: string[]; overall: string } {
+  const per = Array(count).fill("");
+  let overall = "";
+  try {
+    const match = raw.match(/\{[\s\S]*\}$/); // 末尾にあるJSON風を抽出
+    const jsonText = match ? match[0] : raw;
+    const obj = JSON.parse(jsonText);
+    if (Array.isArray(obj.articles)) {
+      for (const item of obj.articles) {
+        const idx = typeof item.index === "number" ? item.index : Number(item.i || item.id);
+        if (idx && idx >= 1 && idx <= count && typeof item.summary === "string") {
+          per[idx - 1] = item.summary.trim();
+        }
+      }
+    }
+    if (typeof obj.overall === "string") overall = obj.overall.trim();
+  } catch {
+    // JSON parse 失敗時は後段で fallback
+  }
+  return { per, overall };
 }
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as SummarizeRequest;
-    const query = (body.query || "").trim();
-    const language = (body.language || "ja").trim();
+  const body = (await req.json()) as SummarizeRequest;
+  const query = (body.query || "").trim();
     const days = Math.min(Math.max(Number(body.days ?? 1), 1), 30);
     const pageSize = Math.min(Math.max(Number(body.pageSize ?? 10), 1), 50);
     const preferDiverseSources = Boolean(body.preferDiverseSources);
@@ -128,7 +126,6 @@ export async function POST(req: Request) {
     const url = new URL("https://newsapi.org/v2/everything");
     url.search = new URLSearchParams({
       q: query,
-      language,
       sortBy: "publishedAt",
       pageSize: String(pageSize),
       from: fromDate,
@@ -153,15 +150,12 @@ export async function POST(req: Request) {
       (process.env.DEBUG_NEWSAPI ?? "").toLowerCase() === "true" || process.env.DEBUG_NEWSAPI === "1";
     if (debugNews) {
       try {
-        console.log(
-          "[NewsAPI] raw sample",
-          rawArticles.slice(0, 5).map((a) => ({
-            title: a?.title,
-            source: a?.source?.name,
-            publishedAt: a?.publishedAt,
-            url: a?.url,
-          }))
-        );
+        console.log("[NewsAPI] raw sample", rawArticles.slice(0, 5).map((a) => ({
+          title: a?.title,
+          source: a?.source?.name,
+          publishedAt: a?.publishedAt,
+          url: a?.url,
+        })));
       } catch {
         // noop
       }
@@ -289,11 +283,19 @@ export async function POST(req: Request) {
 
     const finalArticles = enrichedArticles.concat(articles.slice(maxFull));
 
-    const prompt = buildPrompt({ query, days, articles: finalArticles, language });
+    const prompt = buildPrompt({ query, days, articles: finalArticles });
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const aiRes = await openai.responses.create({ model: "gpt-4o-mini", input: prompt, temperature: 0.3 });
-    const summary = extractOutputText(aiRes);
+    const rawSummary = extractOutputText(aiRes);
+    const { per: perSummaries, overall } = parseArticleJson(rawSummary, finalArticles.length);
+
+    // Fallback: per-article summary が欠落しているものには簡易生成
+    finalArticles.forEach((a, i) => {
+      if (!perSummaries[i]) {
+        perSummaries[i] = a.title.slice(0, 40);
+      }
+    });
 
     try {
       console.log(
@@ -304,7 +306,7 @@ export async function POST(req: Request) {
       // noop
     }
 
-    return NextResponse.json({ summary, articles: finalArticles });
+  return NextResponse.json({ overallSummary: overall || rawSummary.slice(0, 500), articles: finalArticles.map((a, i) => ({ ...a, summary: perSummaries[i] })) });
   } catch (err: unknown) {
     return NextResponse.json(
       {
