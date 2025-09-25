@@ -27,6 +27,10 @@ type RawNewsArticle = {
 };
 
 const RETAIL_QUERY = '((retail OR "retail industry" OR 小売 OR "小売業" OR e-commerce OR ecommerce OR EC OR "supply chain" OR 店舗 OR オムニチャネル OR omnichannel OR Amazon OR Walmart OR Shopify OR Target OR Costco))';
+// 話題性判定用キーワード（頻出ブランド/概念）
+const TREND_KEYWORDS = [
+  'ai','生成','omnichannel','オムニ','supply','chain','inflation','物価','price','価格','walmart','amazon','shopify','costco','target','tesla','logistics','物流','inventory','在庫','demand','需要','holiday','セール','sale','決算','earnings','expansion','出店','閉店','撤退','labor','雇用','strike','ストライキ','sustainability','サステナ','eco','脱炭素','digital','デジタル','loyalty','ロイヤルティ','membership','サブスク','subscription'
+];
 
 async function fetchNewsBatch(params: {
   apiKey: string;
@@ -77,15 +81,49 @@ function normalize(raw: RawNewsArticle[]): Article[] {
   return out;
 }
 
+interface ScoredArticle extends Article { score: number }
+
+function scoreArticles(articles: Article[]): ScoredArticle[] {
+  const now = Date.now();
+  // ソース出現数 (横断報道 = 話題性) を算出
+  const srcFreq: Record<string, number> = {};
+  for (const a of articles) {
+    const s = a.source || 'unknown';
+    srcFreq[s] = (srcFreq[s]||0)+1;
+  }
+  const maxSrcFreq = Math.max(1, ...Object.values(srcFreq));
+
+  const keywordRegexes = TREND_KEYWORDS.map(k => new RegExp(`\\b${k.replace(/[-/\\^$*+?.()|[\]{}]/g,'\\$&')}\\b`,'i'));
+
+  return articles.map(a => {
+    const ageHours = (() => {
+      const t = Date.parse(a.publishedAt || '') || now;
+      return (now - t) / 36e5;
+    })();
+    const recency = 1 / (1 + ageHours / 12); // 12h で 0.5 目安
+    const textForKw = (a.title + ' ' + a.description).toLowerCase();
+    let kwHits = 0;
+    for (const r of keywordRegexes) if (r.test(textForKw)) kwHits++;
+    const keywordBoost = Math.min(kwHits, 6) * 0.15; // 上限 0.9
+    const crossSource = (srcFreq[a.source] / maxSrcFreq) * 0.6; // 多ソース露出ほど +
+    const descLen = (a.description || '').length;
+    const lengthQuality = descLen > 300 ? 0.25 : descLen > 120 ? 0.15 : descLen > 60 ? 0.05 : 0;
+    // 同義/重複っぽい短いタイトルはペナルティ
+    const penalty = a.title.length < 25 ? 0.1 : 0;
+    const score = +(recency + keywordBoost + crossSource + lengthQuality - penalty).toFixed(4);
+    return { ...a, score };
+  });
+}
+
 function buildClusterPrompt(articles: Article[]): string {
   const list = articles
-    .map(
-      (a) =>
-        `${a.index}. TITLE: ${a.title}\nSOURCE: ${a.source}\nPUBLISHED: ${a.publishedAt}\nDESC: ${(a.description || "").slice(0, 200)}`
-    )
+    .map((a) => {
+      const score = (a as unknown as { score?: number }).score;
+      return `${a.index}. [score=${score ?? 'N/A'}] TITLE: ${a.title}\nSOURCE: ${a.source}\nPUBLISHED: ${a.publishedAt}\nDESC: ${(a.description || "").slice(0, 220)}`;
+    })
     .join("\n\n");
 
-  return `You are an analyst identifying CURRENT, HIGH-IMPACT RETAIL INDUSTRY TRENDS.\nArticles list (indexed):\n${list}\n\nTask: Cluster articles into up to 8 trending topics for the global retail / e-commerce sector (supply chain, consumer shifts, strategy, technology, macro).\nReturn STRICT JSON ONLY (no markdown). JSON schema:\n{\n  "trendingTopics": [\n    {\n      "topic": "短い日本語名",\n      "reason": "なぜ注目か(日本語1文)",\n      "articles": [1,2],\n      "message": "要約メッセージ(日本語1文)",\n      "support": ["具体的根拠1", "具体的根拠2"],\n      "significance": "影響/示唆(日本語1文)",\n      "citations": ["APA形式引用", "APA形式引用"]\n    }\n  ]\n}\nRules:\n- 必ず articles 配列はインデックス参照のみ\n- support は最大3件、出典を簡潔に\n- citations は代表記事 1~3 件 (Title. Source. YYYY-MM-DD. URL) 形式 (簡易APA)\n- 重要度順 (最もホットなトレンドを先頭)\n- データが不足する場合は返さない (空文字禁止)\n- 重複・ほぼ同義のトピックは統合\n出力は JSON のみ:`;
+  return `You are an expert retail industry trend analyst. Identify HIGH-VIRALITY topical clusters.\nWeighted Articles (index + score):\n${list}\n\nInstructions:\n- Use score to prioritize inclusion (higher score => more central).\n- Produce up to 8 clusters; each cluster MUST contain only clearly related articles.\n- Ignore outliers with very low semantic relation even if high score.\n- Prefer clusters with cross-source coverage (different sources).\nJSON ONLY. Schema:\n{\n  "trendingTopics": [ {\n    "topic": "短い日本語名",\n    "reason": "なぜ注目か(日本語1文)",\n    "articles": [1,2],\n    "message": "中心的動き(日本語1文)",\n    "support": ["具体的根拠1","具体的根拠2"],\n    "significance": "影響/示唆(日本語1文)",\n    "citations": ["Title. Source. YYYY-MM-DD. URL"]\n  } ]\n}\nRules:\n- articles は index 数字のみ。\n- support は最大3件。曖昧語(恐らく等)禁止。\n- citations は各 cluster 1~3 件。\n- トピック順 = 緊急性/広がり/構造転換性 の複合優先度。\n- 類似/重複トピックは統合。\nOutput JSON:`;
 }
 
 interface ClusterJSONTopic {
@@ -139,8 +177,20 @@ export async function POST(req: Request) {
     // 最新順でソート
     normalized.sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1));
 
-    // LLMへのトークン対策: 上位 N 件 (最大 80) のみクラスタリング対象
-    const clusterTarget = normalized.slice(0, 80);
+    // 話題性スコア計算
+    const scored = scoreArticles(normalized);
+    // スコア降順で並び替えし上位をクラスタ対象 (最大100)
+    const clusterSource = scored.sort((a,b)=> b.score - a.score);
+    const clusterTargetRaw = clusterSource.slice(0, 100);
+    // 再インデックス（プロンプト内 index は 1..N 連番）
+    const clusterTarget: Article[] = clusterTargetRaw.map((a,i) => ({
+      title: a.title,
+      description: a.description,
+      url: a.url,
+      source: a.source,
+      publishedAt: a.publishedAt,
+      index: i+1
+    }));
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const prompt = buildClusterPrompt(clusterTarget);
@@ -187,7 +237,16 @@ export async function POST(req: Request) {
       totalFetched: mergedRaw.length,
       articlesUsedForClustering: clusterTarget.length,
       trendingTopics: parsed.trendingTopics,
-      articles: clusterTarget,
+      // スコア付き原本 (上位200 目安) も返す
+      scoredArticles: clusterSource.slice(0, 200).map(a => ({
+        title: a.title,
+        description: a.description,
+        url: a.url,
+        source: a.source,
+        publishedAt: a.publishedAt,
+        score: a.score
+      })),
+      clusteredArticles: clusterTarget,
     });
   } catch (err: unknown) {
     return NextResponse.json(
