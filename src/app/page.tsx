@@ -168,27 +168,7 @@ export default function Home() {
         {/* Results */}
         {result && (
           <div className="space-y-6">
-            {/* Summary Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Globe className="h-5 w-5" />
-                  要約結果
-                </CardTitle>
-                <CardDescription>
-                  ChatGPTによる{query}に関するニュースの要約
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="prose prose-sm sm:prose max-w-none">
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {result.overallSummary || "（サマリーが空です）"}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Articles Section */}
+            {/* Articles Section (per-article summaries only) */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -234,11 +214,6 @@ export default function Home() {
                               {article.title}
                             </a>
                           </h3>
-                          {article.summary && (
-                            <p className="text-sm text-primary font-medium mb-2 line-clamp-3">
-                              要約: {article.summary}
-                            </p>
-                          )}
                           {article.description && (
                             <p className="text-xs text-muted-foreground mb-3 line-clamp-3">
                               {article.description}
@@ -254,6 +229,14 @@ export default function Home() {
                               {new Date(article.publishedAt).toLocaleDateString('ja-JP')}
                             </span>
                           </div>
+                          {article.summary && (
+                            <div className="mt-3 pt-2 border-t border-border/40">
+                              <p className="text-sm leading-snug">
+                                <span className="font-semibold mr-1">要約:</span>
+                                {article.summary}
+                              </p>
+                            </div>
+                          )}
                         </div>
                         <Button variant="outline" size="sm" asChild>
                           <a
