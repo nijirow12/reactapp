@@ -143,8 +143,7 @@ export async function POST(req: Request) {
         q: query,
         sortBy: "publishedAt",
         pageSize: String(pageSize),
-        from: fromDate,
-        language: "ja", // デフォルトは日本語記事
+        from: fromDate, // デフォルトは日本語記事
       }).toString();
     }
 
