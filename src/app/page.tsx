@@ -25,6 +25,7 @@ type Result = {
 export default function Home() {
   const [query, setQuery] = useState("AI");
   const [industry, setIndustry] = useState<string>("");
+  const [country, setCountry] = useState<string>("");
   const [days, setDays] = useState(3);
   const [pageSize, setPageSize] = useState(10);
   const [preferDiverseSources, setPreferDiverseSources] = useState(true);
@@ -47,10 +48,10 @@ export default function Home() {
         }
       }
 
-      const res = await fetch("/api/summarize", {
+    const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ query: finalQuery, days, pageSize, preferDiverseSources }),
+  body: JSON.stringify({ query: finalQuery, days, pageSize, preferDiverseSources, country: country || undefined }),
       });
       const json = await res.json();
       // クライアント側: 取得した記事と抽出全文を必ずコンソールに出力（開発/本番問わず）
@@ -131,6 +132,26 @@ export default function Home() {
                   <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                     <Building2 className="h-3 w-3" /> 選択すると代表キーワードを自動付与
                   </p>
+                </div>
+                <div>
+                  <Label htmlFor="country">国 (top-headlines)</Label>
+                  <select
+                    id="country"
+                    value={country}
+                    onChange={(e) => setCountry(e.target.value)}
+                    className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">(未指定)</option>
+                    <option value="jp">日本 (jp)</option>
+                    <option value="us">米国 (us)</option>
+                    <option value="gb">英国 (gb)</option>
+                    <option value="de">ドイツ (de)</option>
+                    <option value="fr">フランス (fr)</option>
+                    <option value="au">オーストラリア (au)</option>
+                    <option value="ca">カナダ (ca)</option>
+                    <option value="in">インド (in)</option>
+                  </select>
+                  <p className="mt-1 text-xs text-muted-foreground">指定すると top-headlines を使用（期間指定や sortBy は無効）。</p>
                 </div>
                 {/* 言語指定は削除（常に多言語記事→日本語要約） */}
                 <div>

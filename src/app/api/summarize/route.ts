@@ -9,6 +9,7 @@ type SummarizeRequest = {
   days?: number;
   pageSize?: number;
   preferDiverseSources?: boolean;
+  country?: string; // ISO 2-letter (for top-headlines)
 };
 
 type Article = {
@@ -103,6 +104,7 @@ export async function POST(req: Request) {
   try {
   const body = (await req.json()) as SummarizeRequest;
   const query = (body.query || "").trim();
+  const country = (body.country || "").trim().toLowerCase();
     const days = Math.min(Math.max(Number(body.days ?? 1), 1), 30);
     const pageSize = Math.min(Math.max(Number(body.pageSize ?? 10), 1), 50);
     const preferDiverseSources = Boolean(body.preferDiverseSources);
@@ -125,14 +127,26 @@ export async function POST(req: Request) {
       .toISOString()
       .slice(0, 10); // YYYY-MM-DD
 
-    const url = new URL("https://newsapi.org/v2/everything");
-    url.search = new URLSearchParams({
-      q: query,
-      sortBy: "publishedAt",
-      pageSize: String(pageSize),
-      from: fromDate,
-  language: "ja", // 日本語記事限定
-    }).toString();
+    // country が指定された場合は top-headlines を利用（from/sortBy 不可）
+    let url: URL;
+    if (country) {
+      url = new URL("https://newsapi.org/v2/top-headlines");
+      const params: Record<string, string> = {
+        country,
+        pageSize: String(pageSize),
+      };
+      if (query) params.q = query; // top-headlines でもキーワードは利用可
+      url.search = new URLSearchParams(params).toString();
+    } else {
+      url = new URL("https://newsapi.org/v2/everything");
+      url.search = new URLSearchParams({
+        q: query,
+        sortBy: "publishedAt",
+        pageSize: String(pageSize),
+        from: fromDate,
+        language: "ja", // デフォルトは日本語記事
+      }).toString();
+    }
 
     const newsRes = await fetch(url.toString(), {
       headers: { "X-Api-Key": NEWSAPI_API_KEY },
@@ -185,7 +199,7 @@ export async function POST(req: Request) {
       deduped.push(item);
     }
 
-    // 2) ソース多様性優先（オプション）
+  // 2) ソース多様性優先（オプション） ※ top-headlines でも適用
     let articles: Article[] = deduped;
     if (preferDiverseSources) {
       const bySource = new Map<string, Article>();
