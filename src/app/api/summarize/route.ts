@@ -131,6 +131,7 @@ export async function POST(req: Request) {
       sortBy: "publishedAt",
       pageSize: String(pageSize),
       from: fromDate,
+  language: "ja", // 日本語記事限定
     }).toString();
 
     const newsRes = await fetch(url.toString(), {

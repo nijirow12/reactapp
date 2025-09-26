@@ -26,7 +26,7 @@ type RawNewsArticle = {
   publishedAt?: string | null;
 };
 
-const RETAIL_QUERY = '((retail OR "retail industry" OR 小売 OR "小売業" OR e-commerce OR ecommerce OR EC OR "supply chain" OR 店舗 OR オムニチャネル OR omnichannel OR Amazon OR Walmart OR Shopify OR Target OR Costco))';
+const RETAIL_QUERY = '((小売 OR "小売業" OR 流通 OR EC OR "eコマース" OR "ネット通販" OR 店舗 OR チェーン店 OR オムニチャネル OR 在庫 OR 物流 OR サプライチェーン OR "サプライ チェーン" OR 値上げ OR 価格改定 OR セール OR 決算 OR 出店 OR 閉店 OR 消費動向 OR 購買データ OR Amazon OR 楽天 OR イオン OR セブン＆アイ OR ファーストリテイリング OR ユニクロ OR ドンキホーテ OR ドン・キホーテ))';
 // 話題性判定用キーワード（頻出ブランド/概念）
 const TREND_KEYWORDS = [
   'ai','生成','omnichannel','オムニ','supply','chain','inflation','物価','price','価格','walmart','amazon','shopify','costco','target','tesla','logistics','物流','inventory','在庫','demand','需要','holiday','セール','sale','決算','earnings','expansion','出店','閉店','撤退','labor','雇用','strike','ストライキ','sustainability','サステナ','eco','脱炭素','digital','デジタル','loyalty','ロイヤルティ','membership','サブスク','subscription'
@@ -45,7 +45,7 @@ async function fetchNewsBatch(params: {
     q: RETAIL_QUERY,
     sortBy,
     from,
-    language: "en", // retail関連は英語が多いので英語優先（日本語記事も拾いたければ削除）
+  language: "ja", // 日本語記事限定
     page: String(page),
     pageSize: String(pageSize),
   }).toString();
